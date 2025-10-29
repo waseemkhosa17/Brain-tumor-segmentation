@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brain Tumor Classification - Deep Learning</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .card {
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            background: rgba(255, 255, 255, 0.95);
+        }
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 10px;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .upload-area:hover {
+            background: rgba(102, 126, 234, 0.1);
+        }
+        .result-image {
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            max-width: 100%;
+        }
+        .probability-bar {
+            height: 25px;
+            margin: 5px 0;
+            border-radius: 12px;
+            background: linear-gradient(90deg, #4CAF50, #8BC34A);
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border: none;
+            border-radius: 25px;
+            padding: 10px 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container py-5">
+        <div class="row justify-content-center">
+            <div class="col-lg-10">
+                <!-- Header -->
+                <div class="text-center mb-5">
+                    <h1 class="text-white mb-3">
+                        <i class="fas fa-brain me-3"></i>
+                        Brain Tumor Classification
+                    </h1>
+                    <p class="text-white lead">Deep Learning Model for MRI Analysis</p>
+                </div>
+
+                <!-- Main Card -->
+                <div class="card p-4 mb-4">
+                    <div class="row">
+                        <!-- Upload Section -->
+                        <div class="col-md-6">
+                            <h4 class="mb-4">
+                                <i class="fas fa-upload me-2"></i>
+                                Upload MRI Image
+                            </h4>
+                            
+                            <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+                                <i class="fas fa-file-image fa-3x text-primary mb-3"></i>
+                                <h5>Click to Upload MRI Image</h5>
+                                <p class="text-muted">Supports .jpg, .jpeg, .png files</p>
+                                <input type="file" id="fileInput" accept=".jpg,.jpeg,.png" class="d-none">
+                            </div>
+
+                            <div class="mt-4">
+                                <button class="btn btn-primary w-100 mb-2" onclick="analyzeImage()">
+                                    <i class="fas fa-search me-2"></i>
+                                    Analyze Image
+                                </button>
+                                <button class="btn btn-outline-primary w-100" onclick="loadSample()">
+                                    <i class="fas fa-play-circle me-2"></i>
+                                    Try Sample
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Results Section -->
+                        <div class="col-md-6">
+                            <h4 class="mb-4">
+                                <i class="fas fa-chart-bar me-2"></i>
+                                Classification Results
+                            </h4>
+                            
+                            <!-- Loading -->
+                            <div id="loading" class="text-center py-5" style="display: none;">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                                <p class="mt-2">Analyzing MRI Image...</p>
+                            </div>
+
+                            <!-- Results -->
+                            <div id="results" style="display: none;">
+                                <div class="mb-4">
+                                    <img id="resultImage" class="result-image w-100" alt="Classification Result">
+                                </div>
+                                
+                                <!-- Prediction -->
+                                <div class="alert alert-success">
+                                    <h5 id="predictionText">Prediction: </h5>
+                                    <p id="confidenceText" class="mb-0">Confidence: </p>
+                                </div>
+
+                                <!-- Probabilities -->
+                                <h6>Class Probabilities:</h6>
+                                <div id="probabilityBars"></div>
+                            </div>
+
+                            <!-- Initial Placeholder -->
+                            <div id="placeholder" class="text-center py-5 text-muted">
+                                <i class="fas fa-chart-pie fa-3x mb-3"></i>
+                                <p>Upload an MRI image to see classification results</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Info Section -->
+                <div class="card p-4">
+                    <h5 class="mb-3">
+                        <i class="fas fa-info-circle me-2"></i>
+                        About This Tool
+                    </h5>
+                    <div class="row">
+                        <div class="col-md-3 mb-3">
+                            <h6><i class="fas fa-cogs me-2"></i>Model</h6>
+                            <small class="text-muted">ResNet18 Deep CNN</small>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <h6><i class="fas fa-tags me-2"></i>Classes</h6>
+                            <small class="text-muted">4 Tumor Types</small>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <h6><i class="fas fa-brain me-2"></i>Accuracy</h6>
+                            <small class="text-muted">High Precision</small>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <h6><i class="fas fa-bolt me-2"></i>Speed</h6>
+                            <small class="text-muted">Real-time Analysis</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentFile = null;
+
+        // File input change handler
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            if (e.target.files.length > 0) {
+                currentFile = e.target.files[0];
+                document.getElementById('uploadArea').innerHTML = `
+                    <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
+                    <h5>File Selected</h5>
+                    <p class="text-muted">${e.target.files[0].name}</p>
+                    <small class="text-primary">Click to change file</small>
+                `;
+            }
+        });
+
+        async function analyzeImage() {
+            if (!currentFile) {
+                alert('Please select an image file first');
+                return;
+            }
+
+            showLoading();
+            
+            const formData = new FormData();
+            formData.append('file', currentFile);
+
+            try {
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showResults(data);
+                } else {
+                    alert('Error: ' + data.error);
+                    hideLoading();
+                }
+            } catch (error) {
+                alert('Error: ' + error);
+                hideLoading();
+            }
+        }
+
+        async function loadSample() {
+            showLoading();
+            
+            try {
+                const response = await fetch('/sample');
+                const data = await response.json();
+                
+                if (data.success) {
+                    showResults(data);
+                } else {
+                    alert('Error: ' + data.error);
+                    hideLoading();
+                }
+            } catch (error) {
+                alert('Error: ' + error);
+                hideLoading();
+            }
+        }
+
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('placeholder').style.display = 'none';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function showResults(data) {
+            hideLoading();
+            
+            // Update image
+            document.getElementById('resultImage').src = data.image;
+            
+            // Update prediction
+            document.getElementById('predictionText').textContent = `Prediction: ${data.prediction}`;
+            document.getElementById('confidenceText').textContent = `Confidence: ${data.confidence}%`;
+            
+            // Update probability bars
+            const probBars = document.getElementById('probabilityBars');
+            probBars.innerHTML = '';
+            
+            data.probabilities.forEach(prob => {
+                const barHtml = `
+                    <div class="d-flex align-items-center mb-2">
+                        <div class="me-3" style="width: 120px;">${prob.class}</div>
+                        <div class="flex-grow-1">
+                            <div class="probability-bar" style="width: ${prob.probability}%"></div>
+                        </div>
+                        <div class="ms-3" style="width: 60px; text-align: right;">
+                            ${prob.probability}%
+                        </div>
+                    </div>
+                `;
+                probBars.innerHTML += barHtml;
+            });
+            
+            // Show results
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('placeholder').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
