@@ -1,53 +1,116 @@
 import os
-import torch
 import numpy as np
-from torch.utils.data import Dataset
-from typing import Dict, List, Tuple, Optional
+import nibabel as nib
+import torch
+from torch.utils.data import Dataset, DataLoader
+from scipy.ndimage import zoom
 
-class BraTSDataset3D(Dataset):
-    def __init__(self, data_dir: str, mode: str = 'train', target_size: Tuple[int, int, int] = (128, 128, 128)):
-        self.data_dir = data_dir
-        self.mode = mode
-        self.target_size = target_size
-        self.samples = self._load_samples()
-        
-    def _load_samples(self) -> List[Dict[str, str]]:
-        samples = []
-        if not os.path.exists(self.data_dir):
-            print(f"Warning: Data directory {self.data_dir} not found. Using synthetic data.")
-        return samples
-    
-    def __len__(self) -> int:
-        if not self.samples:
-            return 100
-        return len(self.samples)
-    
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        if not self.samples:
-            return self._get_synthetic_sample()
-        return self._get_synthetic_sample()
-    
-    def _get_synthetic_sample(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        image = torch.randn(4, *self.target_size)
-        mask = torch.zeros(3, *self.target_size)
-        
-        center = np.random.randint(30, 98, 3)
-        radius = np.random.randint(5, 15)
-        
-        z, y, x = np.ogrid[:self.target_size[0], :self.target_size[1], :self.target_size[2]]
-        distance = np.sqrt((z - center[0])**2 + (y - center[1])**2 + (x - center[2])**2)
-        sphere = distance <= radius
-        
-        mask[0] = torch.from_numpy(sphere.astype(np.float32))
-        mask[1] = torch.from_numpy((distance <= radius * 0.7).astype(np.float32))
-        mask[2] = torch.from_numpy((distance <= radius * 0.4).astype(np.float32))
-        
-        return image, mask
+class BraTSDataset(Dataset):
+    def __init__(self, data_dir, case_list, target_shape=(128,128,128), augment=False):
+        self.data_dir     = data_dir
+        self.cases        = case_list
+        self.target_shape = target_shape
+        self.augment      = augment
+        self.modalities   = ["flair", "t1", "t1ce", "t2"]
 
-if __name__ == "__main__":
-    dataset = BraTSDataset3D('./data/raw', mode='train')
-    print(f"Dataset length: {len(dataset)}")
-    
-    image, mask = dataset[0]
-    print(f"Image shape: {image.shape}")
-    print(f"Mask shape: {mask.shape}")
+    def __len__(self):
+        return len(self.cases)
+
+    def normalize(self, volume):
+        """Z-score normalization on non-zero brain voxels only"""
+        mask = volume > 0
+        if mask.sum() == 0:
+            return volume
+        mean = volume[mask].mean()
+        std  = volume[mask].std() + 1e-8
+        volume = (volume - mean) / std
+        volume[~mask] = 0
+        return volume
+
+    def resize(self, volume, order=1):
+        """Resize volume to target shape"""
+        factors = [t / s for t, s in zip(self.target_shape, volume.shape)]
+        return zoom(volume, factors, order=order)
+
+    def remap_labels(self, seg):
+        """
+        BraTS original labels: 0=BG, 1=NCR, 2=ED, 4=ET
+        Remap to:              0=BG, 1=NCR, 2=ED, 3=ET
+        """
+        new_seg = np.zeros_like(seg, dtype=np.int64)
+        new_seg[seg == 1] = 1
+        new_seg[seg == 2] = 2
+        new_seg[seg == 4] = 3
+        return new_seg
+
+    def augment_data(self, image, seg):
+        """Random flips along each axis"""
+        for axis in range(1, 4):  # axes 1,2,3 (skip channel axis 0)
+            if np.random.rand() > 0.5:
+                image = np.flip(image, axis=axis).copy()
+                seg   = np.flip(seg,   axis=axis-1).copy()
+        return image, seg
+
+    def __getitem__(self, idx):
+        case      = self.cases[idx]
+        case_path = os.path.join(self.data_dir, case)
+
+        # Load and process 4 modalities
+        imgs = []
+        for mod in self.modalities:
+            path = os.path.join(case_path, f"{case}_{mod}.nii.gz")
+            vol  = nib.load(path).get_fdata().astype(np.float32)
+            vol  = self.normalize(vol)
+            vol  = self.resize(vol, order=1)
+            imgs.append(vol)
+
+        image = np.stack(imgs, axis=0)  # shape: (4, 128, 128, 128)
+
+        # Load and process segmentation mask
+        seg_path = os.path.join(case_path, f"{case}_seg.nii.gz")
+        seg = nib.load(seg_path).get_fdata().astype(np.float32)
+        seg = self.resize(seg, order=0)  # order=0 for nearest-neighbor (labels)
+        seg = self.remap_labels(seg)     # remap 4 -> 3
+
+        # Augmentation
+        if self.augment:
+            image, seg = self.augment_data(image, seg)
+
+        return (
+            torch.FloatTensor(image),
+            torch.LongTensor(seg)
+        )
+
+
+def get_loaders(data_dir, batch_size=2, val_split=0.2, num_workers=2):
+    """Create train and validation DataLoaders"""
+    cases = sorted([f for f in os.listdir(data_dir) if f.startswith("BraTS")])
+
+    # Split: 80% train, 20% val
+    split     = int((1 - val_split) * len(cases))
+    train_cases = cases[:split]
+    val_cases   = cases[split:]
+
+    print(f"Total cases : {len(cases)}")
+    print(f"Train cases : {len(train_cases)}")
+    print(f"Val cases   : {len(val_cases)}")
+
+    train_dataset = BraTSDataset(data_dir, train_cases, augment=True)
+    val_dataset   = BraTSDataset(data_dir, val_cases,   augment=False)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+
+    return train_loader, val_loader
