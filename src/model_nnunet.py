@@ -1,94 +1,110 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from typing import List, Tuple, Optional
 
-class ConvBlock3D(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, dropout: float = 0.0):
-        super(ConvBlock3D, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.InstanceNorm3d(out_channels),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Dropout3d(dropout),
-            nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.InstanceNorm3d(out_channels),
-            nn.LeakyReLU(0.2, inplace=True)
+class ConvBlock(nn.Module):
+    """Two conv layers with Instance Norm and Leaky ReLU"""
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv3d(in_ch, out_ch, kernel_size=3, padding=1, bias=False),
+            nn.InstanceNorm3d(out_ch, affine=True),
+            nn.LeakyReLU(0.01, inplace=True),
+            nn.Conv3d(out_ch, out_ch, kernel_size=3, padding=1, bias=False),
+            nn.InstanceNorm3d(out_ch, affine=True),
+            nn.LeakyReLU(0.01, inplace=True),
         )
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.conv(x)
+    def forward(self, x):
+        return self.block(x)
 
-class EncoderBlock3D(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, dropout: float = 0.0):
-        super(EncoderBlock3D, self).__init__()
-        self.conv = ConvBlock3D(in_channels, out_channels, dropout)
-        self.pool = nn.MaxPool3d(2)
-    
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        x = self.conv(x)
-        pooled = self.pool(x)
-        return x, pooled
 
-class DecoderBlock3D(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, dropout: float = 0.0):
-        super(DecoderBlock3D, self).__init__()
-        self.up = nn.ConvTranspose3d(in_channels, out_channels, kernel_size=2, stride=2)
-        self.conv = ConvBlock3D(out_channels * 2, out_channels, dropout)
-    
-    def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+class EncoderBlock(nn.Module):
+    """ConvBlock + MaxPool downsampling"""
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.conv = ConvBlock(in_ch, out_ch)
+        self.pool = nn.MaxPool3d(kernel_size=2, stride=2)
+
+    def forward(self, x):
+        skip = self.conv(x)   # save for skip connection
+        down = self.pool(skip)
+        return skip, down
+
+
+class DecoderBlock(nn.Module):
+    """Upsample + concatenate skip + ConvBlock"""
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.up   = nn.ConvTranspose3d(in_ch, out_ch, kernel_size=2, stride=2)
+        self.conv = ConvBlock(out_ch * 2, out_ch)
+
+    def forward(self, x, skip):
         x = self.up(x)
-        diff = [skip.size()[i] - x.size()[i] for i in range(2, len(x.size()))]
-        x = F.pad(x, [diff[2] // 2, diff[2] - diff[2] // 2,
-                      diff[1] // 2, diff[1] - diff[1] // 2,
-                      diff[0] // 2, diff[0] - diff[0] // 2])
-        x = torch.cat([x, skip], dim=1)
+        x = torch.cat([x, skip], dim=1)  # concatenate skip connection
         return self.conv(x)
 
-class nnUNet3D(nn.Module):
-    def __init__(self, in_channels: int = 4, out_channels: int = 3, base_channels: int = 32, depth: int = 5, dropout: float = 0.3):
-        super(nnUNet3D, self).__init__()
-        
-        self.depth = depth
-        self.encoders = nn.ModuleList()
-        self.decoders = nn.ModuleList()
-        
-        for i in range(depth):
-            in_ch = in_channels if i == 0 else base_channels * (2 ** (i - 1))
-            out_ch = base_channels * (2 ** i)
-            self.encoders.append(EncoderBlock3D(in_ch, out_ch, dropout))
-        
-        self.bottleneck = ConvBlock3D(base_channels * (2 ** (depth - 1)), base_channels * (2 ** depth), dropout)
-        
-        for i in range(depth - 1, -1, -1):
-            in_ch = base_channels * (2 ** (i + 1))
-            out_ch = base_channels * (2 ** i)
-            self.decoders.append(DecoderBlock3D(in_ch, out_ch, dropout))
-        
-        self.final_conv = nn.Conv3d(base_channels, out_channels, kernel_size=1)
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        skips = []
-        
-        for encoder in self.encoders:
-            skip, x = encoder(x)
-            skips.append(skip)
-        
-        x = self.bottleneck(x)
-        
-        for i, decoder in enumerate(self.decoders):
-            x = decoder(x, skips[-(i + 1)])
-        
-        return self.final_conv(x)
 
-if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = nnUNet3D(in_channels=4, out_channels=3, base_channels=32, depth=5)
-    model.to(device)
-    
-    x = torch.randn(2, 4, 128, 128, 128).to(device)
-    output = model(x)
-    
-    print(f"Input shape: {x.shape}")
-    print(f"Output shape: {output.shape}")
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+class NNUNet3D(nn.Module):
+    """
+    3D nnU-Net Architecture
+    Input : (B, 4, 128, 128, 128)  - 4 MRI modalities
+    Output: (B, 4, 128, 128, 128)  - 4 classes (BG, NCR, ED, ET)
+    """
+    def __init__(self, in_channels=4, out_channels=4, base_ch=32):
+        super().__init__()
+        f = base_ch  # 32
+
+        # Encoder (5 levels)
+        self.enc1 = EncoderBlock(in_channels, f)      # 32
+        self.enc2 = EncoderBlock(f,           f*2)    # 64
+        self.enc3 = EncoderBlock(f*2,         f*4)    # 128
+        self.enc4 = EncoderBlock(f*4,         f*8)    # 256
+
+        # Bottleneck
+        self.bottleneck = ConvBlock(f*8, f*16)        # 512
+
+        # Decoder (4 levels)
+        self.dec4 = DecoderBlock(f*16, f*8)           # 256
+        self.dec3 = DecoderBlock(f*8,  f*4)           # 128
+        self.dec2 = DecoderBlock(f*4,  f*2)           # 64
+        self.dec1 = DecoderBlock(f*2,  f)             # 32
+
+        # Final output layer
+        self.final = nn.Conv3d(f, out_channels, kernel_size=1)
+
+        # Weight initialization
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out",
+                                        nonlinearity="leaky_relu")
+            elif isinstance(m, nn.InstanceNorm3d) and m.affine:
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, x):
+        # Encoder path
+        s1, x = self.enc1(x)
+        s2, x = self.enc2(x)
+        s3, x = self.enc3(x)
+        s4, x = self.enc4(x)
+
+        # Bottleneck
+        x = self.bottleneck(x)
+
+        # Decoder path with skip connections
+        x = self.dec4(x, s4)
+        x = self.dec3(x, s3)
+        x = self.dec2(x, s2)
+        x = self.dec1(x, s1)
+
+        return self.final(x)
+
+
+def count_parameters(model):
+    total = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters    : {total:,}")
+    print(f"Trainable parameters: {trainable:,}")
+    return trainable
