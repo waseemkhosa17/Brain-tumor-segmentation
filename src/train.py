@@ -51,7 +51,7 @@ def save_checkpoint(epoch, model, optimizer, scheduler,
 
 def load_checkpoint(filename, model, optimizer, scheduler, scaler):
     print(f"Loading checkpoint: {filename}")
-    ckpt = torch.load(filename, map_location="cuda"
+    ckpt = torch.load(filename, map_location="cuda", weights_only=False
                       if torch.cuda.is_available() else "cpu")
     model.load_state_dict(ckpt["model_state"])
     optimizer.load_state_dict(ckpt["optimizer"])
